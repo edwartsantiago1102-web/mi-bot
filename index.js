@@ -16,36 +16,65 @@ app.get('/', async (req,res)=>{
 })
 app.listen(process.env.PORT || 3000)
 
-const patBot = [`ha acariciado a ${BOT_NAME} 🥺🐺`,`le ha dado pat pat a ${BOT_NAME} 💚`,`está mimando a ${BOT_NAME}`,`le rascó las orejitas a ${BOT_NAME} 🐾`,`le dio muchos pats a ${BOT_NAME} hasta dormirlo 😴`]
-const patOtros = ["le dio pat pat a {target} 🥰","acarició a {target} 💚","está mimando a {target}","le rascó las orejitas a {target} 🐾"]
+async function downloadAnySong(videoUrl, videoId){
+  let buffer = null
 
-async function getAudioUrl(videoUrl, videoId){
-  const PIPEDS = [
+  // 1. ytdl-core con TODOS los clientes (este agarra el 90%)
+  try{
+    const stream = ytdl(videoUrl, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      playerClients: ["IOS","ANDROID","WEB","TV","WEB_EMBEDDED","MWEB","WEB_CREATOR"]
+    })
+    const chunks=[]; for await(const c of stream) chunks.push(c)
+    buffer = Buffer.concat(chunks)
+    if(buffer.length > 5000) return buffer
+  }catch(e){ console.log("ytdl fail:", e.message) }
+
+  // 2. FabDL - agarra Shorts como el "quiero queque" de tu captura
+  try{
+    const res = await fetch(`https://api.fabdl.com/youtube/get?url=https://www.youtube.com/watch?v=${videoId}`, { signal: AbortSignal.timeout(15000) })
+    const json = await res.json()
+    let dl = json?.result?.downloadUrl || json?.result?.url || json?.result?.downloads?.mp3?.[0]?.url
+    if(dl){
+      const r = await fetch(dl)
+      const b = Buffer.from(await r.arrayBuffer())
+      if(b.length > 5000) return b
+    }
+  }catch(e){ console.log("fabdl fail:", e.message) }
+
+  // 3. Piped - 3 servidores
+  const pipedApis = [
     `https://pipedapi.kavin.rocks/streams/${videoId}`,
     `https://pipedapi.moomoo.me/streams/${videoId}`,
-    `https://pipedapi.r4fo.com/streams/${videoId}`,
-    `https://api.piped.projectsegfau.lt/streams/${videoId}`,
-    `https://piped-api.lunar.icu/streams/${videoId}`,
-    `https://pipedapi.syncpundit.io/streams/${videoId}`
+    `https://api.piped.projectsegfau.lt/streams/${videoId}`
   ]
-  for(const api of PIPEDS){
+  for(const api of pipedApis){
     try{
-      const r = await fetch(api, { headers:{"User-Agent":"Mozilla/5.0"}, signal: AbortSignal.timeout(8000) })
+      const r = await fetch(api, { signal: AbortSignal.timeout(8000) })
       const j = await r.json()
       if(j?.audioStreams?.length){
         const best = j.audioStreams.sort((a,b)=>b.bitrate-a.bitrate)[0]
-        if(best?.url) return best.url
+        const ar = await fetch(best.url)
+        const b = Buffer.from(await ar.arrayBuffer())
+        if(b.length > 5000) return b
       }
     }catch{}
   }
-  const COBALTS = ["https://co.wuk.sh/api/json","https://api.cobalt.tools/api/json","https://cobalt.api.timelessnesses.me/api/json"]
-  for(const api of COBALTS){
-    try{
-      const res = await fetch(api, { method:"POST", headers:{"Accept":"application/json","Content-Type":"application/json"}, body: JSON.stringify({url:videoUrl,isAudioOnly:true,aFormat:"mp3"}), signal: AbortSignal.timeout(8000) })
-      const data = await res.json()
-      if(data?.url) return data.url
-    }catch{}
-  }
+
+  // 4. Cobalt - ultimo respaldo
+  try{
+    const res = await fetch("https://co.wuk.sh/api/json", {
+      method:"POST", headers:{"Accept":"application/json","Content-Type":"application/json"},
+      body: JSON.stringify({url:videoUrl,isAudioOnly:true,aFormat:"mp3"})
+    })
+    const data = await res.json()
+    if(data?.url){
+      const r = await fetch(data.url)
+      return Buffer.from(await r.arrayBuffer())
+    }
+  }catch{}
+
   return null
 }
 
@@ -58,12 +87,12 @@ async function start(){
   sock.ev.on('group-participants.update', async (upd)=>{
     try{
       if(upd.action!=='add') return
-      for(const user of upd.participants){
-        const caption = `hola que tal!! @${user.split('@')[0]}. Soy ${BOT_NAME}, el bot personal del grupo *☾ Bot Group ☽*. Diviértete creando stikers: manda la foto y pon *.s*`
+      for(const u of upd.participants){
+        const caption = `hola que tal!! @${u.split('@')[0]}. Soy ${BOT_NAME}, el bot personal del grupo *☾ Bot Group ☽*. Diviértete creando stikers: manda la foto y pon *.s*`
         const files = fs.readdirSync('./')
         const found = files.find(f=> f.toLowerCase().includes('legoshi') && f.match(/\.(jpg|jpeg|png|webp)$/))
-        if(found) await sock.sendMessage(upd.id, { image: fs.readFileSync('./'+found), caption, mentions:[user] })
-        else await sock.sendMessage(upd.id, { text: caption, mentions:[user] })
+        if(found) await sock.sendMessage(upd.id, { image: fs.readFileSync('./'+found), caption, mentions:[u] })
+        else await sock.sendMessage(upd.id, { text: caption, mentions:[u] })
       }
     }catch{}
   })
@@ -80,10 +109,7 @@ async function start(){
         const quoted=m.message.extendedTextMessage?.contextInfo?.quotedMessage
         const msg=quoted?{message:quoted}:m
         const buf=await downloadMediaMessage(msg,'buffer',{})
-        if(!buf) return
-        let pack="☾ Bot Group ☽"
-        try{ if(from.endsWith('@g.us')) pack=(await sock.groupMetadata(from)).subject }catch{}
-        const sticker=new Sticker(buf,{pack, author:`Hecho por ${sender}`, type:'full', quality:80})
+        const sticker=new Sticker(buf,{pack:"☾ Bot Group ☽", author:sender, type:'full', quality:80})
         await sock.sendMessage(from,{sticker:await sticker.toBuffer()},{quoted:m})
       }catch{}
     }
@@ -91,14 +117,9 @@ async function start(){
     if(lower.startsWith('#pat')){
       const mentioned=m.message.extendedTextMessage?.contextInfo?.mentionedJid||[]
       const jid=mentioned[0]
-      const isBot =!jid || textRaw.toLowerCase().includes(BOT_NAME.toLowerCase()) || (jid && sock.user.id.includes(jid.split('@')[0]))
-      if(isBot){
-        const frase = patBot[Math.floor(Math.random()*patBot.length)]
-        await sock.sendMessage(from,{text:`*${BOT_NAME} v2.0 in operation!*\n🐺 *${sender}* ${frase}`})
-      }else{
-        const frase = patOtros[Math.floor(Math.random()*patOtros.length)].replace(/{target}/g, `@${jid.split('@')[0]}`)
-        await sock.sendMessage(from,{text:`✨ *${sender}* ${frase}`, mentions:[jid]})
-      }
+      const isBot=!jid||lower.includes(BOT_NAME.toLowerCase())
+      const text=isBot?`*${BOT_NAME} v2.0 in operation!*\n🐺 *${sender}* ha acariciado a ${BOT_NAME} 🥺🐺`:`✨ *${sender}* le dio pat pat a @${jid.split('@')[0]} 🥰`
+      await sock.sendMessage(from,{text, mentions:isBot?[]:[jid]})
     }
 
     if(lower.startsWith('#play ')){
@@ -109,22 +130,14 @@ async function start(){
         const search=await yts(query)
         const video=search.videos[0]
         await sock.sendMessage(from,{ image:{url:video.thumbnail}, caption:`🎵 *${video.title}*\n⏱️ ${video.timestamp}\n🎧 Bajando...`},{quoted:m})
-        let audioUrl = await getAudioUrl(video.url, video.videoId)
-        let buffer = null
-        if(audioUrl){
-          try{ const r = await fetch(audioUrl, { headers:{"User-Agent":"Mozilla/5.0"} }); buffer = Buffer.from(await r.arrayBuffer()) }catch{}
-        }
-        if(!buffer || buffer.length < 10000){
-          try{
-            const stream = ytdl(video.url, { filter:'audioonly', quality:'highestaudio', playerClients:["IOS","ANDROID","WEB","TV"] })
-            const chunks=[]; for await(const c of stream) chunks.push(c)
-            buffer = Buffer.concat(chunks)
-          }catch{}
-        }
-        if(!buffer || buffer.length < 10000) throw new Error("No se pudo")
+
+        const buffer = await downloadAnySong(video.url, video.videoId)
+        if(!buffer) throw new Error("no buffer")
+
         await sock.sendMessage(from,{ audio: buffer, mimetype:'audio/mpeg' },{quoted:m})
       }catch(e){
-        await sock.sendMessage(from,{text:`⚠️ Falló un servidor, prueba:\n#play ${query}`},{quoted:m})
+        console.log(e.message)
+        await sock.sendMessage(from,{text:`⚠️ Intenta de nuevo:\n#play ${query}`},{quoted:m})
       }
     }
   })
