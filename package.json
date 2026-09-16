@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +15,8 @@
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "pino": "^10.3.1",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.4",
+    "express": "^4.18.2",
+    "qrcode": "^1.5.3"
   }
 }
