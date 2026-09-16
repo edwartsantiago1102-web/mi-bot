@@ -4,7 +4,6 @@ const express = require('express')
 const QRCode = require('qrcode')
 const { Sticker } = require('wa-sticker-formatter')
 const yts = require('yt-search')
-const ytdl = require('@distube/ytdl-core')
 const fs = require('fs')
 
 const BOT_NAME = "Legoshi"
@@ -13,7 +12,7 @@ const app = express()
 let qrImage = null
 app.get('/', async (req,res)=>{
   if(!qrImage) return res.send('<h1>Bot iniciando...</h1><script>setTimeout(()=>location.reload(),3000)</script>')
-  res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#111;color:white"><h2>QR ${BOT_NAME}</h2><img src="${qrImage}" style="width:340px;background:white;padding:12px;border-radius:12px"></div>`)
+  res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#111;color:white;font-family:sans-serif"><h2>QR ${BOT_NAME}</h2><img src="${qrImage}" style="width:340px;background:white;padding:12px;border-radius:12px"></div>`)
 })
 app.listen(process.env.PORT || 3000)
 
@@ -53,7 +52,7 @@ async function start(){
         if(found) await sock.sendMessage(upd.id, { image: fs.readFileSync('./'+found), caption, mentions:[user] })
         else await sock.sendMessage(upd.id, { text: caption, mentions:[user] })
       }
-    }catch(e){}
+    }catch{}
   })
 
   sock.ev.on('messages.upsert', async ({messages})=>{
@@ -73,7 +72,7 @@ async function start(){
         try{ if(from.endsWith('@g.us')) pack=(await sock.groupMetadata(from)).subject }catch{}
         const sticker=new Sticker(buf,{pack, author:`Hecho por ${sender}`, type:'full', quality:80})
         await sock.sendMessage(from,{sticker:await sticker.toBuffer()},{quoted:m})
-      }catch(e){}
+      }catch{}
     }
 
     if(lower.startsWith('#pat')){
@@ -97,22 +96,32 @@ async function start(){
         await sock.sendMessage(from,{text:`🔎 Buscando: *${query}*`},{quoted:m})
         const search=await yts(query)
         const video=search.videos[0]
+        const videoId = video.videoId
         await sock.sendMessage(from,{ image:{url:video.thumbnail}, caption:`🎵 *${video.title}*\n⏱️ ${video.timestamp}\n🎧 Bajando original...`},{quoted:m})
-        const COBALTS = ["https://api.cobalt.tools/api/json","https://co.wuk.sh/api/json","https://cobalt.api.timelessnesses.me/api/json"]
+
+        const PIPEDS = [
+          `https://pipedapi.kavin.rocks/streams/${videoId}`,
+          `https://pipedapi.moomoo.me/streams/${videoId}`,
+          `https://api.piped.projectsegfau.lt/streams/${videoId}`
+        ]
         let audioUrl = null
-        for(const api of COBALTS){
+        for(const api of PIPEDS){
           try{
-            const res = await fetch(api, { method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ url: video.url, isAudioOnly: true, aFormat: "mp3" }) })
-            const data = await res.json()
-            if(data.url){ audioUrl = data.url; break }
+            const r = await fetch(api, { headers: { "User-Agent": "Mozilla/5.0" } })
+            const j = await r.json()
+            if(j.audioStreams && j.audioStreams.length){
+              audioUrl = j.audioStreams.sort((a,b)=>b.bitrate-a.bitrate)[0].url
+              if(audioUrl) break
+            }
           }catch{}
         }
-        if(!audioUrl) throw new Error("apis caidas")
+        if(!audioUrl) throw new Error("no piped")
         const audioRes = await fetch(audioUrl)
         const buffer = Buffer.from(await audioRes.arrayBuffer())
         await sock.sendMessage(from,{ audio: buffer, mimetype: 'audio/mpeg' },{quoted:m})
       }catch(e){
-        await sock.sendMessage(from,{text:`⚠️ Falló, intenta de nuevo en 5 seg:\n#play ${query}`},{quoted:m})
+        console.log(e.message)
+        await sock.sendMessage(from,{text:`⚠️ Intenta de nuevo en 5 seg:\n#play ${query}`},{quoted:m})
       }
     }
   })
