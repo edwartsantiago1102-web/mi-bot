@@ -6,52 +6,41 @@ const { Sticker } = require('wa-sticker-formatter')
 const fs = require('fs')
 
 const BOT_NAME = "Legoshi"
-const OWNER = "Edlegoshi"
-
 const app = express()
 let qrImage = null
 app.get('/', async (req,res)=>{
-  if(!qrImage) return res.send('<h1>Bot iniciando...</h1><script>setTimeout(()=>location.reload(),3000)</script>')
-  res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#111;color:white"><h2>QR ${BOT_NAME}</h2><img src="${qrImage}" style="width:340px;background:white;padding:12px;border-radius:12px"></div>`)
+  if(!qrImage) return res.send('<h1>Legoshi iniciando... si ves esto mucho rato ve a Deployments > View Logs para el QR</h1><script>setTimeout(()=>location.reload(),3000)</script>')
+  res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#111;color:white"><h2>QR ${BOT_NAME}</h2><img src="${qrImage}" style="width:340px;background:white;padding:12px;border-radius:12px"><p>Escanea con WhatsApp</p></div>`)
 })
 app.listen(process.env.PORT || 3000)
 
-// Contador persistente
 let pats = {}
 try{ if(fs.existsSync('./pats.json')) pats = JSON.parse(fs.readFileSync('./pats.json')) }catch{}
 function savePats(){ fs.writeFileSync('./pats.json', JSON.stringify(pats)) }
 
-const patBot = [
-  "ha acariciado a {bot}",
-  "le ha dado pat pat a {bot}",
-  "esta mimando a {bot} hasta dormirlo",
-  "le rasco las orejitas a {bot}",
-  "le dio muchos mimos a {bot}",
-  "esta consintiendo a {bot} con pat pat",
-  "le dio su dosis diaria de pat a {bot}",
-  "abrazo a {bot} con pat pat"
-]
-const patOtros = [
-  "le dio pat pat a {target}",
-  "acaricio a {target}",
-  "esta mimando a {target}",
-  "le rasco las orejitas a {target}",
-  "le dio muchos pats a {target}",
-  "consintio a {target} con mucho amor"
-]
+const patBot = ["ha acariciado a {bot}","le ha dado pat pat a {bot}","esta mimando a {bot} hasta dormirlo","le rasco las orejitas a {bot}","le dio muchos mimos a {bot}","esta consintiendo a {bot} con pat pat"]
+const patOtros = ["le dio pat pat a {target}","acaricio a {target}","esta mimando a {target}","le rasco las orejitas a {target}"]
 
 async function askAI(prompt){
-  try{
-    const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(prompt)}`, { signal: AbortSignal.timeout(15000) })
-    const t = await res.text()
-    if(t && t.length > 15) return t.slice(0, 1500)
-  }catch(e){ console.log("AI fallo 1", e.message) }
-  try{
-    const res2 = await fetch(`https://text.pollinations.ai/openai/${encodeURIComponent(prompt)}`, { signal: AbortSignal.timeout(15000) })
-    const t2 = await res2.text()
-    if(t2 && t2.length > 15) return t2.slice(0, 1500)
-  }catch{}
-  return "La IA esta ocupada, intenta con #b de nuevo en 5 seg."
+  const SYSTEM = `Eres Legoshi, el bot del grupo ☾ Bot Group ☽. Eres un lobo tierno, tranquilo, amigable y servicial. Respondes corto, max 5 lineas, con emojis suaves. Ayudas con ingles, mate, tareas, traducciones, consejos. Tu owner es ☾Edlegoshi☽. Nunca dices que eres Meta AI ni Llama, eres Legoshi.`
+  // Groq - IA como yo, 0 fallos
+  if(process.env.GROQ_API_KEY){
+    try{
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [{role:"system", content: SYSTEM},{role:"user", content: prompt}],
+          max_tokens: 700, temperature: 0.8
+        }),
+        signal: AbortSignal.timeout(20000)
+      })
+      const j = await res.json()
+      if(j.choices?.[0]?.message?.content) return j.choices[0].message.content.slice(0,1500)
+    }catch(e){ console.log("Groq fail", e.message) }
+  }
+  return "Estoy pensando... intenta de nuevo en 2 seg con #b"
 }
 
 async function start(){
@@ -148,7 +137,7 @@ Bienvenid@ @${user.split('@')[0]}`
           return sock.sendMessage(from,{text:`${BOT_NAME} AI - Math\n\n${prompt} = ${r}`},{quoted:m})
         }catch{}
       }
-      await sock.sendMessage(from,{text:`${BOT_NAME} AI pensando...`},{quoted:m})
+      await sock.sendMessage(from,{text:`${BOT_NAME} AI pensando... 🐺`},{quoted:m})
       const respuesta = await askAI(prompt)
       await sock.sendMessage(from,{text:`${BOT_NAME} AI\n\n${respuesta}`},{quoted:m})
     }
