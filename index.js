@@ -7,7 +7,7 @@ const yts = require('yt-search')
 const ytdl = require('@distube/ytdl-core')
 const fs = require('fs')
 
-const BOT_NAME = "Legoshi" // Cambia aqui el nombre y todo cambia
+const BOT_NAME = "Legoshi"
 
 const app = express()
 let qrImage = null
@@ -23,16 +23,14 @@ const patBot = [
   `está mimando a ${BOT_NAME}, se ve feliz`,
   `le rascó las orejitas a ${BOT_NAME} 🐾`,
   `le dio muchos pats a ${BOT_NAME} hasta que se durmió 😴`,
-  `${BOT_NAME} mueve la colita porque {user} le dio pat pat`,
-  `¡{user} consintió a ${BOT_NAME}! *pat pat*`
+  `${BOT_NAME} mueve la colita porque {user} le dio pat pat`
 ]
 const patOtros = [
   "le dio pat pat a {target} 🥰",
   "acarició a {target} con mucho cariño 💚",
   "está mimando a {target}",
   "le rascó las orejitas a {target} 🐾",
-  "le dio muchos pats a {target} hasta dormirlo 😴",
-  "consintió a {target} con pat pat"
+  "le dio muchos pats a {target} hasta dormirlo 😴"
 ]
 
 async function start(){
@@ -49,13 +47,13 @@ async function start(){
     try{
       if(upd.action!=='add') return
       for(const user of upd.participants){
-        const caption = `hola que tal!! @${user.split('@')[0]}. Soy ${BOT_NAME}, el bot personal del grupo *☾ Bot Group ☽*. Diviértete creando stikers: manda la foto y pon *.s*\n\nReglas:\n- Evita lenguaje soez\n- No stikers sexual\n- No reportes por spam\n\nDisfruta tu estancia!!! 𖹭`
+        const caption = `hola que tal!! @${user.split('@')[0]}. Soy ${BOT_NAME}, el bot personal del grupo *☾ Bot Group ☽*. Diviértete creando stikers: manda la foto y pon *.s*`
         const files = fs.readdirSync('./')
         const found = files.find(f=> f.toLowerCase().includes('legoshi') && f.match(/\.(jpg|jpeg|png|webp)$/))
         if(found) await sock.sendMessage(upd.id, { image: fs.readFileSync('./'+found), caption, mentions:[user] })
         else await sock.sendMessage(upd.id, { text: caption, mentions:[user] })
       }
-    }catch(e){console.log(e)}
+    }catch(e){}
   })
 
   sock.ev.on('messages.upsert', async ({messages})=>{
@@ -75,7 +73,7 @@ async function start(){
         try{ if(from.endsWith('@g.us')) pack=(await sock.groupMetadata(from)).subject }catch{}
         const sticker=new Sticker(buf,{pack, author:`Hecho por ${sender}`, type:'full', quality:80})
         await sock.sendMessage(from,{sticker:await sticker.toBuffer()},{quoted:m})
-      }catch(e){console.log(e.message)}
+      }catch(e){}
     }
 
     if(lower.startsWith('#pat')){
@@ -88,7 +86,7 @@ async function start(){
       } else {
         const targetName = `@${jid.split('@')[0]}`
         const frase = patOtros[Math.floor(Math.random()*patOtros.length)].replace(/{target}/g, targetName)
-        await sock.sendMessage(from,{text:`✨ *${sender}* ${frase}`, mentions:[m.key.participant||from, jid].filter(Boolean)})
+        await sock.sendMessage(from,{text:`✨ *${sender}* ${frase}`, mentions:[jid]})
       }
     }
 
@@ -99,20 +97,22 @@ async function start(){
         await sock.sendMessage(from,{text:`🔎 Buscando: *${query}*`},{quoted:m})
         const search=await yts(query)
         const video=search.videos[0]
-        await sock.sendMessage(from,{ image:{url:video.thumbnail}, caption:`🎵 *${video.title}*\n⏱️ ${video.timestamp}\n🎧 *Bajando original...*`},{quoted:m})
-        const res = await fetch("https://api.cobalt.tools/api/json", {
-          method: "POST",
-          headers: { "Accept": "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ url: video.url, isAudioOnly: true, aFormat: "mp3" })
-        })
-        const data = await res.json()
-        if(!data.url) throw new Error("cobalt fail")
-        const audioRes = await fetch(data.url)
+        await sock.sendMessage(from,{ image:{url:video.thumbnail}, caption:`🎵 *${video.title}*\n⏱️ ${video.timestamp}\n🎧 Bajando original...`},{quoted:m})
+        const COBALTS = ["https://api.cobalt.tools/api/json","https://co.wuk.sh/api/json","https://cobalt.api.timelessnesses.me/api/json"]
+        let audioUrl = null
+        for(const api of COBALTS){
+          try{
+            const res = await fetch(api, { method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ url: video.url, isAudioOnly: true, aFormat: "mp3" }) })
+            const data = await res.json()
+            if(data.url){ audioUrl = data.url; break }
+          }catch{}
+        }
+        if(!audioUrl) throw new Error("apis caidas")
+        const audioRes = await fetch(audioUrl)
         const buffer = Buffer.from(await audioRes.arrayBuffer())
         await sock.sendMessage(from,{ audio: buffer, mimetype: 'audio/mpeg' },{quoted:m})
       }catch(e){
-        console.log(e.message)
-        await sock.sendMessage(from,{text:`⚠️ Falló un momento la API, intenta de nuevo:\n#play ${query}`},{quoted:m})
+        await sock.sendMessage(from,{text:`⚠️ Falló, intenta de nuevo en 5 seg:\n#play ${query}`},{quoted:m})
       }
     }
   })
