@@ -4,43 +4,56 @@ const express = require('express')
 const QRCode = require('qrcode')
 const { Sticker } = require('wa-sticker-formatter')
 const yts = require('yt-search')
+const ytdl = require('@distube/ytdl-core')
 const fs = require('fs')
 
 const BOT_NAME = "Legoshi"
-
 const app = express()
 let qrImage = null
 app.get('/', async (req,res)=>{
   if(!qrImage) return res.send('<h1>Bot iniciando...</h1><script>setTimeout(()=>location.reload(),3000)</script>')
-  res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#111;color:white;font-family:sans-serif"><h2>QR ${BOT_NAME}</h2><img src="${qrImage}" style="width:340px;background:white;padding:12px;border-radius:12px"></div>`)
+  res.send(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#111;color:white"><h2>QR ${BOT_NAME}</h2><img src="${qrImage}" style="width:340px;background:white;padding:12px;border-radius:12px"></div>`)
 })
 app.listen(process.env.PORT || 3000)
 
-const patBot = [
-  `ha acariciado a ${BOT_NAME} con mucho cariño 🥺🐺`,
-  `le ha dado pat pat a la cabecita de ${BOT_NAME} 💚`,
-  `está mimando a ${BOT_NAME}, se ve feliz`,
-  `le rascó las orejitas a ${BOT_NAME} 🐾`,
-  `le dio muchos pats a ${BOT_NAME} hasta que se durmió 😴`,
-  `${BOT_NAME} mueve la colita porque {user} le dio pat pat`
-]
-const patOtros = [
-  "le dio pat pat a {target} 🥰",
-  "acarició a {target} con mucho cariño 💚",
-  "está mimando a {target}",
-  "le rascó las orejitas a {target} 🐾",
-  "le dio muchos pats a {target} hasta dormirlo 😴"
-]
+const patBot = [`ha acariciado a ${BOT_NAME} 🥺🐺`,`le ha dado pat pat a ${BOT_NAME} 💚`,`está mimando a ${BOT_NAME}`,`le rascó las orejitas a ${BOT_NAME} 🐾`,`le dio muchos pats a ${BOT_NAME} hasta dormirlo 😴`]
+const patOtros = ["le dio pat pat a {target} 🥰","acarició a {target} 💚","está mimando a {target}","le rascó las orejitas a {target} 🐾"]
+
+async function getAudioUrl(videoUrl, videoId){
+  const PIPEDS = [
+    `https://pipedapi.kavin.rocks/streams/${videoId}`,
+    `https://pipedapi.moomoo.me/streams/${videoId}`,
+    `https://pipedapi.r4fo.com/streams/${videoId}`,
+    `https://api.piped.projectsegfau.lt/streams/${videoId}`,
+    `https://piped-api.lunar.icu/streams/${videoId}`,
+    `https://pipedapi.syncpundit.io/streams/${videoId}`
+  ]
+  for(const api of PIPEDS){
+    try{
+      const r = await fetch(api, { headers:{"User-Agent":"Mozilla/5.0"}, signal: AbortSignal.timeout(8000) })
+      const j = await r.json()
+      if(j?.audioStreams?.length){
+        const best = j.audioStreams.sort((a,b)=>b.bitrate-a.bitrate)[0]
+        if(best?.url) return best.url
+      }
+    }catch{}
+  }
+  const COBALTS = ["https://co.wuk.sh/api/json","https://api.cobalt.tools/api/json","https://cobalt.api.timelessnesses.me/api/json"]
+  for(const api of COBALTS){
+    try{
+      const res = await fetch(api, { method:"POST", headers:{"Accept":"application/json","Content-Type":"application/json"}, body: JSON.stringify({url:videoUrl,isAudioOnly:true,aFormat:"mp3"}), signal: AbortSignal.timeout(8000) })
+      const data = await res.json()
+      if(data?.url) return data.url
+    }catch{}
+  }
+  return null
+}
 
 async function start(){
   const { state, saveCreds } = await useMultiFileAuthState('auth')
   const sock = makeWASocket({ auth: state, logger: P({level:'silent'}), browser:["Ubuntu","Chrome","20.0.04"] })
   sock.ev.on('creds.update', saveCreds)
-  sock.ev.on('connection.update', async ({qr,connection})=>{
-    if(qr) qrImage = await QRCode.toDataURL(qr)
-    if(connection==='open'){ console.log("CONECTADO"); qrImage=null }
-    if(connection==='close') start()
-  })
+  sock.ev.on('connection.update', async ({qr,connection})=>{ if(qr) qrImage = await QRCode.toDataURL(qr); if(connection==='open'){console.log("CONECTADO");qrImage=null} if(connection==='close') start() })
 
   sock.ev.on('group-participants.update', async (upd)=>{
     try{
@@ -80,11 +93,10 @@ async function start(){
       const jid=mentioned[0]
       const isBot =!jid || textRaw.toLowerCase().includes(BOT_NAME.toLowerCase()) || (jid && sock.user.id.includes(jid.split('@')[0]))
       if(isBot){
-        const frase = patBot[Math.floor(Math.random()*patBot.length)].replace(/{user}/g, sender)
+        const frase = patBot[Math.floor(Math.random()*patBot.length)]
         await sock.sendMessage(from,{text:`*${BOT_NAME} v2.0 in operation!*\n🐺 *${sender}* ${frase}`})
-      } else {
-        const targetName = `@${jid.split('@')[0]}`
-        const frase = patOtros[Math.floor(Math.random()*patOtros.length)].replace(/{target}/g, targetName)
+      }else{
+        const frase = patOtros[Math.floor(Math.random()*patOtros.length)].replace(/{target}/g, `@${jid.split('@')[0]}`)
         await sock.sendMessage(from,{text:`✨ *${sender}* ${frase}`, mentions:[jid]})
       }
     }
@@ -96,32 +108,23 @@ async function start(){
         await sock.sendMessage(from,{text:`🔎 Buscando: *${query}*`},{quoted:m})
         const search=await yts(query)
         const video=search.videos[0]
-        const videoId = video.videoId
-        await sock.sendMessage(from,{ image:{url:video.thumbnail}, caption:`🎵 *${video.title}*\n⏱️ ${video.timestamp}\n🎧 Bajando original...`},{quoted:m})
-
-        const PIPEDS = [
-          `https://pipedapi.kavin.rocks/streams/${videoId}`,
-          `https://pipedapi.moomoo.me/streams/${videoId}`,
-          `https://api.piped.projectsegfau.lt/streams/${videoId}`
-        ]
-        let audioUrl = null
-        for(const api of PIPEDS){
+        await sock.sendMessage(from,{ image:{url:video.thumbnail}, caption:`🎵 *${video.title}*\n⏱️ ${video.timestamp}\n🎧 Bajando...`},{quoted:m})
+        let audioUrl = await getAudioUrl(video.url, video.videoId)
+        let buffer = null
+        if(audioUrl){
+          try{ const r = await fetch(audioUrl, { headers:{"User-Agent":"Mozilla/5.0"} }); buffer = Buffer.from(await r.arrayBuffer()) }catch{}
+        }
+        if(!buffer || buffer.length < 10000){
           try{
-            const r = await fetch(api, { headers: { "User-Agent": "Mozilla/5.0" } })
-            const j = await r.json()
-            if(j.audioStreams && j.audioStreams.length){
-              audioUrl = j.audioStreams.sort((a,b)=>b.bitrate-a.bitrate)[0].url
-              if(audioUrl) break
-            }
+            const stream = ytdl(video.url, { filter:'audioonly', quality:'highestaudio', playerClients:["IOS","ANDROID","WEB","TV"] })
+            const chunks=[]; for await(const c of stream) chunks.push(c)
+            buffer = Buffer.concat(chunks)
           }catch{}
         }
-        if(!audioUrl) throw new Error("no piped")
-        const audioRes = await fetch(audioUrl)
-        const buffer = Buffer.from(await audioRes.arrayBuffer())
-        await sock.sendMessage(from,{ audio: buffer, mimetype: 'audio/mpeg' },{quoted:m})
+        if(!buffer || buffer.length < 10000) throw new Error("No se pudo")
+        await sock.sendMessage(from,{ audio: buffer, mimetype:'audio/mpeg' },{quoted:m})
       }catch(e){
-        console.log(e.message)
-        await sock.sendMessage(from,{text:`⚠️ Intenta de nuevo en 5 seg:\n#play ${query}`},{quoted:m})
+        await sock.sendMessage(from,{text:`⚠️ Falló un servidor, prueba:\n#play ${query}`},{quoted:m})
       }
     }
   })
