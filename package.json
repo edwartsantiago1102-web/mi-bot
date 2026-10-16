@@ -1,5 +1,5 @@
 {
-  "name": "joseph-v2.1",
+  "name": "joseph-bot-v2.1",
   "version": "2.1.0",
   "main": "index.js",
   "scripts": {
@@ -7,7 +7,6 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
-    "axios": "^1.7.2",
     "express": "^4.19.2",
     "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.2",
