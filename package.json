@@ -13,6 +13,6 @@
     "fluent-ffmpeg": "^2.1.2",
     "pino": "^8.21.0",
     "qrcode": "^1.5.3",
-    "wa-sticker-formatter": "^4.4"
+    "wa-sticker-formatter": "^4.3.4"
   }
 }
