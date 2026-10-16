@@ -1,105 +1,59 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
-const express = require('express')
-const qrcode = require('qrcode')
-const pino = require('pino')
-const axios = require('axios')
-const { Sticker, StickerTypes } = require('wa-sticker-formatter')
-const fs = require('fs')
-
+const { default: makeWASocket, useMultiFileAuthState, downloadMediaMessage, DisconnectReason } = require("@whiskeysockets/baileys")
+const { Sticker } = require("wa-sticker-formatter")
+const P = require("pino")
+const express = require("express")
+const QRCode = require("qrcode")
+const fs = require("fs")
+const ffmpeg = require("fluent-ffmpeg")
+const ffmpegPath = require("ffmpeg-static")
+ffmpeg.setFfmpegPath(ffmpegPath)
 const app = express()
-let qrCodeData = null
+let latestQR = null
 let isConnected = false
-
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth')
-
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ['Joseph v2.1', 'Chrome', '1.0']
-    })
-
-    sock.ev.on('creds.update', saveCreds)
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update
-        if (qr) {
-            qrCodeData = qr
-            console.log('QR Generado')
-        }
-        if (connection === 'open') {
-            isConnected = true
-            qrCodeData = null
-            console.log('Joseph v2.1 Conectado ✅')
-        }
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut
-            if (shouldReconnect) startBot()
-        }
-    })
-
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0]
-        if (!msg.message || msg.key.fromMe) return
-
-        const from = msg.key.remoteJid
-        const body = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || ''
-        const command = body.trim().toLowerCase()
-
-        // #ping
-        if (command === '#ping') {
-            await sock.sendMessage(from, { text: '🏓 Pong! Joseph v2.1 Activo' })
-        }
-
-        // #menu
-        if (command === '#menu' || command === '#help') {
-            await sock.sendMessage(from, { text: `*JOSEPH v2.1 - MENU*\n\n#ping - Estado\n#s - Sticker (responde a imagen)\n#mp3 - Audio (responde a video)\n#pin + texto - Busca imagen de Pinterest\n#hd - Mejora imagen (responde a foto)` })
-        }
-
-        // #s - Sticker
-        if (command === '#s' || command.startsWith('#s ')) {
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage
-            if (quoted?.imageMessage || quoted?.videoMessage || msg.message.imageMessage) {
-                try {
-                    const buffer = await sock.downloadMediaMessage(msg.message.extendedTextMessage? { message: { imageMessage: quoted.imageMessage || quoted.videoMessage } } : msg)
-                    const sticker = new Sticker(buffer, {
-                        pack: 'Joseph v2.1',
-                        author: 'Edwart',
-                        type: StickerTypes.FULL,
-                        quality: 70
-                    })
-                    await sock.sendMessage(from, await sticker.toMessage())
-                } catch(e) {
-                    await sock.sendMessage(from, { text: '❌ Error creando sticker' })
-                }
-            }
-        }
-
-        // #pin
-        if (command.startsWith('#pin ')) {
-            const query = body.slice(5).trim()
-            if (!query) return sock.sendMessage(from, { text: 'Escribe: #pin gatos' })
-            try {
-                await sock.sendMessage(from, { text: `🔍 Buscando: ${query}...` })
-                const res = await axios.get(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=5&client_id=YOUR_UNSPLASH_KEY`)
-                // Fallback si no tienes key de unsplash, usa pinterest scraper simple
-                const imageUrl = `https://source.unsplash.com/800x600/?${encodeURIComponent(query)}`
-                await sock.sendMessage(from, { image: { url: imageUrl }, caption: `📌 Resultado: ${query}` })
-            } catch(e) {
-                const imageUrl = `https://source.unsplash.com/800x600/?${encodeURIComponent(query)}`
-                await sock.sendMessage(from, { image: { url: imageUrl }, caption: `📌 ${query}` })
-            }
-        }
-    })
-}
-
-// Servidor para el QR
-app.get('/', async (req, res) => {
-    if (isConnected) return res.send('<h1>✅ Joseph v2.1 Conectado</h1>')
-    if (!qrCodeData) return res.send('<h1>Cargando QR... recarga en 5s</h1><script>setTimeout(()=>location.reload(),5000)</script>')
-    const qrImage = await qrcode.toDataURL(qrCodeData)
-    res.send(`<center><h1>Escanea el QR - Joseph v2.1</h1><img src="${qrImage}" width="300"><p>Se actualiza solo</p><script>setTimeout(()=>location.reload(),15000)</script></center>`)
+app.get("/", async (req, res) => {
+  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.1</h2><p>#s = sticker | #mp3 = audio</p></body>`)
+  else if (latestQR) {
+    const qrImage = await QRCode.toDataURL(latestQR)
+    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.1</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
+  } else res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
 })
-
-app.listen(10000, () => console.log('Server en 10000'))
-startBot()
+app.listen(process.env.PORT || 10000, () => console.log("Web lista"))
+async function start() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth")
+  const sock = makeWASocket({ auth: state, logger: P({ level: 'silent' }), browser: ["Joseph v2.1", "Chrome", "1.0"] })
+  sock.ev.on("creds.update", saveCreds)
+  sock.ev.on("connection.update", async (u) => {
+    const { connection, lastDisconnect, qr } = u
+    if (qr) latestQR = qr
+    if (connection === "open") { isConnected = true; latestQR = null; console.log("✅ CONECTADO") }
+    if (connection === "close") { isConnected = false; if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(start, 3000) }
+  })
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const m = messages[0]; if (!m.message || m.key.fromMe) return
+    const from = m.key.remoteJid
+    const text = m.message.conversation || m.message.extendedTextMessage?.text || m.message.imageMessage?.caption || m.message.videoMessage?.caption || ""
+    const lower = text.toLowerCase().trim()
+    if (lower === '#s' || lower === '.s' || lower.startsWith('#s ') || lower.startsWith('.s ')) {
+      try {
+        const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage
+        const msgToSave = quoted ? { message: quoted } : m
+        const buffer = await downloadMediaMessage(msgToSave, 'buffer', {}, { logger: P({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
+        const sticker = new Sticker(buffer, { pack: "Joseph Bot v2.1", author: `Creado por ${m.pushName || "Usuario"}`, type: 'full', quality: 100 })
+        await sock.sendMessage(from, { sticker: await sticker.toBuffer() }, { quoted: m })
+      } catch (e) { await sock.sendMessage(from, { text: "❌ Responde a imagen/video con #s" }, { quoted: m }) }
+    }
+    if (lower === '#mp3' || lower === '.mp3' || lower === '#a') {
+      const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage
+      if (!quoted?.videoMessage) { await sock.sendMessage(from, { text: "❌ Responde a un VIDEO con #mp3" }, { quoted: m }); return }
+      try {
+        await sock.sendMessage(from, { text: "🎵 Convirtiendo..." }, { quoted: m })
+        const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: P({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
+        fs.writeFileSync("temp.mp4", buffer)
+        await new Promise((res, rej) => { ffmpeg("temp.mp4").toFormat("mp3").on("end", res).on("error", rej).save("temp.mp3") })
+        await sock.sendMessage(from, { audio: fs.readFileSync("temp.mp3"), mimetype: "audio/mpeg" }, { quoted: m })
+        fs.unlinkSync("temp.mp4"); fs.unlinkSync("temp.mp3")
+      } catch (e) { await sock.sendMessage(from, { text: "❌ Error convirtiendo" }, { quoted: m }) }
+    }
+  })
+}
+start()
