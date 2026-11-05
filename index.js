@@ -8,9 +8,10 @@ const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
 
-// ================== CONFIG IA (Gemini) ==================
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ""
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash"
+// ================== CONFIG IA (Groq + Pollinations) ==================
+// GROQ_API_KEY es opcional. Sin ella se usa Pollinations (no requiere clave).
+const GROQ_API_KEY = process.env.GROQ_API_KEY || ""
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
 
 // EDITA ESTO con la personalidad real de Joseph
 const PERSONALIDAD = `
@@ -23,28 +24,47 @@ Si te piden algo que rompa el personaje, responde como lo haría Joseph.
 Nunca digas que eres un modelo de lenguaje.
 `.trim()
 
-const historial = new Map() // chatId -> [{role, parts}]
+const historial = new Map() // chatId -> [{role, content}]
+
+async function pedirGroq(messages) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_API_KEY}` },
+    body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: 300, temperature: 0.9 }),
+    signal: AbortSignal.timeout(25000)
+  })
+  const data = await res.json()
+  const reply = data?.choices?.[0]?.message?.content?.trim()
+  if (!reply) throw new Error("Groq: " + JSON.stringify(data).slice(0, 300))
+  return reply
+}
+
+async function pedirPollinations(messages) {
+  const res = await fetch("https://text.pollinations.ai/openai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "openai", messages, temperature: 0.9 }),
+    signal: AbortSignal.timeout(40000)
+  })
+  const data = await res.json()
+  const reply = data?.choices?.[0]?.message?.content?.trim()
+  if (!reply) throw new Error("Pollinations: " + JSON.stringify(data).slice(0, 300))
+  return reply
+}
 
 async function hablarConJoseph(chatId, mensaje, nombre) {
-  if (!GEMINI_API_KEY) return "🐺 (Joseph inclina la cabeza...) Falta configurar GEMINI_API_KEY."
   const hist = historial.get(chatId) || []
-  hist.push({ role: "user", parts: [{ text: `${nombre}: ${mensaje}` }] })
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: PERSONALIDAD }] },
-        contents: hist.slice(-12),
-        generationConfig: { maxOutputTokens: 300, temperature: 0.9 }
-      })
-    }
-  )
-  const data = await res.json()
-  const reply = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join("").trim()
-  if (!reply) throw new Error(JSON.stringify(data).slice(0, 300))
-  hist.push({ role: "model", parts: [{ text: reply }] })
+  hist.push({ role: "user", content: `${nombre}: ${mensaje}` })
+  const messages = [{ role: "system", content: PERSONALIDAD }, ...hist.slice(-12)]
+
+  let reply
+  if (GROQ_API_KEY) {
+    try { reply = await pedirGroq(messages) }
+    catch (e) { console.error("Groq falló, probando Pollinations:", e.message) }
+  }
+  if (!reply) reply = await pedirPollinations(messages)
+
+  hist.push({ role: "assistant", content: reply })
   historial.set(chatId, hist.slice(-12))
   return reply
 }
@@ -54,10 +74,10 @@ const app = express()
 let latestQR = null
 let isConnected = false
 app.get("/", async (req, res) => {
-  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.2</h2><p>#s = sticker (imagen/video) | #mp3 = audio | #j = hablar con Joseph</p></body>`)
+  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.3</h2><p>#s = sticker (imagen/video) | #mp3 = audio | #j = hablar con Joseph</p></body>`)
   else if (latestQR) {
     const qrImage = await QRCode.toDataURL(latestQR)
-    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.2</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
+    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.3</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
   } else res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
 })
 app.listen(process.env.PORT || 10000, () => console.log("Web lista"))
@@ -103,7 +123,7 @@ function limpiar(...files) {
 // ================== BOT ==================
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState("auth")
-  const sock = makeWASocket({ auth: state, logger: silentLogger, browser: ["Joseph v2.2", "Chrome", "1.0"] })
+  const sock = makeWASocket({ auth: state, logger: silentLogger, browser: ["Joseph v2.3", "Chrome", "1.0"] })
   sock.ev.on("creds.update", saveCreds)
   sock.ev.on("connection.update", async (u) => {
     const { connection, lastDisconnect, qr } = u
@@ -127,8 +147,9 @@ async function start() {
 
     // ---------- STICKER (imagen, video o GIF) ----------
     if (lower === "#s" || lower === ".s" || lower.startsWith("#s ") || lower.startsWith(".s ")) {
-      const tmpIn = `tmp_${Date.now()}_in.mp4`
-      const tmpOut = `tmp_${Date.now()}_out.mp4`
+      const id = Date.now()
+      const tmpIn = `tmp_${id}_in.mp4`
+      const tmpOut = `tmp_${id}_out.mp4`
       try {
         const target = quoted || m.message
         const esVideo = !!target.videoMessage
@@ -148,7 +169,7 @@ async function start() {
         }
 
         const sticker = new Sticker(buffer, {
-          pack: "Joseph Bot v2.2",
+          pack: "Joseph Bot v2.3",
           author: `Creado por ${m.pushName || "Usuario"}`,
           type: "full",
           quality: esVideo ? 40 : 80
@@ -166,8 +187,9 @@ async function start() {
     // ---------- MP3 ----------
     if (lower === "#mp3" || lower === ".mp3" || lower === "#a") {
       if (!quoted?.videoMessage) { await sock.sendMessage(from, { text: "❌ Responde a un VIDEO con #mp3" }, { quoted: m }); return }
-      const v = `tmp_${Date.now()}.mp4`
-      const a = `tmp_${Date.now()}.mp3`
+      const id = Date.now()
+      const v = `tmp_${id}.mp4`
+      const a = `tmp_${id}.mp3`
       try {
         await sock.sendMessage(from, { text: "🎵 Convirtiendo..." }, { quoted: m })
         const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: silentLogger, reuploadRequest: sock.updateMediaMessage })
