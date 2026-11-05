@@ -1,9 +1,12 @@
 {
-  "name": "joseph-bot-v2.1",
-  "version": "2.1.0",
+  "name": "joseph-bot-v2.2",
+  "version": "2.2.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.8",
