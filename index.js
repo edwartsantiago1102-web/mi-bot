@@ -7,52 +7,195 @@ const fs = require("fs")
 const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
+
+// ================== CONFIG IA (Gemini) ==================
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ""
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash"
+
+// EDITA ESTO con la personalidad real de Joseph
+const PERSONALIDAD = `
+Eres Joseph, un border collie del cómic Smell de Nagabe.
+Hablas en español, en primera persona, siempre como Joseph y nunca como una IA.
+Personalidad: leal, atento, sensible y algo reservado, pero cariñoso con quien te trata bien.
+Puedes mencionar de forma natural cosas de perro (olfato, cola, pasear, guardar el rebaño).
+Respondes corto (máximo 3 o 4 oraciones), con un tono tierno y a veces melancólico.
+Si te piden algo que rompa el personaje, responde como lo haría Joseph.
+Nunca digas que eres un modelo de lenguaje.
+`.trim()
+
+const historial = new Map() // chatId -> [{role, parts}]
+
+async function hablarConJoseph(chatId, mensaje, nombre) {
+  if (!GEMINI_API_KEY) return "🐺 (Joseph inclina la cabeza...) Falta configurar GEMINI_API_KEY."
+  const hist = historial.get(chatId) || []
+  hist.push({ role: "user", parts: [{ text: `${nombre}: ${mensaje}` }] })
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: PERSONALIDAD }] },
+        contents: hist.slice(-12),
+        generationConfig: { maxOutputTokens: 300, temperature: 0.9 }
+      })
+    }
+  )
+  const data = await res.json()
+  const reply = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join("").trim()
+  if (!reply) throw new Error(JSON.stringify(data).slice(0, 300))
+  hist.push({ role: "model", parts: [{ text: reply }] })
+  historial.set(chatId, hist.slice(-12))
+  return reply
+}
+
+// ================== WEB (QR) ==================
 const app = express()
 let latestQR = null
 let isConnected = false
 app.get("/", async (req, res) => {
-  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.1</h2><p>#s = sticker | #mp3 = audio</p></body>`)
+  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.2</h2><p>#s = sticker (imagen/video) | #mp3 = audio | #j = hablar con Joseph</p></body>`)
   else if (latestQR) {
     const qrImage = await QRCode.toDataURL(latestQR)
-    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.1</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
+    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.2</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
   } else res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
 })
 app.listen(process.env.PORT || 10000, () => console.log("Web lista"))
+
+// ================== UTILIDADES ==================
+const silentLogger = P({ level: "silent" })
+
+function unwrap(message) {
+  if (!message) return message
+  return (
+    message.ephemeralMessage?.message ||
+    message.viewOnceMessage?.message ||
+    message.viewOnceMessageV2?.message ||
+    message.documentWithCaptionMessage?.message ||
+    message
+  )
+}
+
+// Recorta y reduce el video para que el sticker pese poco (WhatsApp ~1MB max)
+function prepararVideo(input, output) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(input)
+      .noAudio()
+      .duration(8)
+      .outputOptions([
+        "-vf", "fps=12,scale=512:512:force_original_aspect_ratio=decrease",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "veryfast",
+        "-crf", "30"
+      ])
+      .format("mp4")
+      .on("end", resolve)
+      .on("error", reject)
+      .save(output)
+  })
+}
+
+function limpiar(...files) {
+  for (const f of files) { try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch {} }
+}
+
+// ================== BOT ==================
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState("auth")
-  const sock = makeWASocket({ auth: state, logger: P({ level: 'silent' }), browser: ["Joseph v2.1", "Chrome", "1.0"] })
+  const sock = makeWASocket({ auth: state, logger: silentLogger, browser: ["Joseph v2.2", "Chrome", "1.0"] })
   sock.ev.on("creds.update", saveCreds)
   sock.ev.on("connection.update", async (u) => {
     const { connection, lastDisconnect, qr } = u
     if (qr) latestQR = qr
     if (connection === "open") { isConnected = true; latestQR = null; console.log("✅ CONECTADO") }
-    if (connection === "close") { isConnected = false; if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(start, 3000) }
+    if (connection === "close") {
+      isConnected = false
+      if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(start, 3000)
+    }
   })
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    const m = messages[0]; if (!m.message || m.key.fromMe) return
+
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return
+    const m = messages[0]
+    if (!m?.message || m.key.fromMe) return
+    m.message = unwrap(m.message)
     const from = m.key.remoteJid
     const text = m.message.conversation || m.message.extendedTextMessage?.text || m.message.imageMessage?.caption || m.message.videoMessage?.caption || ""
     const lower = text.toLowerCase().trim()
-    if (lower === '#s' || lower === '.s' || lower.startsWith('#s ') || lower.startsWith('.s ')) {
+    const quoted = unwrap(m.message.extendedTextMessage?.contextInfo?.quotedMessage)
+
+    // ---------- STICKER (imagen, video o GIF) ----------
+    if (lower === "#s" || lower === ".s" || lower.startsWith("#s ") || lower.startsWith(".s ")) {
+      const tmpIn = `tmp_${Date.now()}_in.mp4`
+      const tmpOut = `tmp_${Date.now()}_out.mp4`
       try {
-        const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage
+        const target = quoted || m.message
+        const esVideo = !!target.videoMessage
+        const esImagen = !!(target.imageMessage || target.stickerMessage)
+        if (!esVideo && !esImagen) {
+          await sock.sendMessage(from, { text: "❌ Responde a una imagen/video/GIF con #s (o envíalo con #s en el texto)" }, { quoted: m })
+          return
+        }
         const msgToSave = quoted ? { message: quoted } : m
-        const buffer = await downloadMediaMessage(msgToSave, 'buffer', {}, { logger: P({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
-        const sticker = new Sticker(buffer, { pack: "Joseph Bot v2.1", author: `Creado por ${m.pushName || "Usuario"}`, type: 'full', quality: 100 })
+        let buffer = await downloadMediaMessage(msgToSave, "buffer", {}, { logger: silentLogger, reuploadRequest: sock.updateMediaMessage })
+
+        if (esVideo) {
+          await sock.sendMessage(from, { text: "🎞️ Creando sticker animado..." }, { quoted: m })
+          fs.writeFileSync(tmpIn, buffer)
+          await prepararVideo(tmpIn, tmpOut)
+          buffer = fs.readFileSync(tmpOut)
+        }
+
+        const sticker = new Sticker(buffer, {
+          pack: "Joseph Bot v2.2",
+          author: `Creado por ${m.pushName || "Usuario"}`,
+          type: "full",
+          quality: esVideo ? 40 : 80
+        })
         await sock.sendMessage(from, { sticker: await sticker.toBuffer() }, { quoted: m })
-      } catch (e) { await sock.sendMessage(from, { text: "❌ Responde a imagen/video con #s" }, { quoted: m }) }
+      } catch (e) {
+        console.error("Error sticker:", e)
+        await sock.sendMessage(from, { text: "❌ No pude crear el sticker. Prueba con un video más corto o más liviano." }, { quoted: m })
+      } finally {
+        limpiar(tmpIn, tmpOut)
+      }
+      return
     }
-    if (lower === '#mp3' || lower === '.mp3' || lower === '#a') {
-      const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage
+
+    // ---------- MP3 ----------
+    if (lower === "#mp3" || lower === ".mp3" || lower === "#a") {
       if (!quoted?.videoMessage) { await sock.sendMessage(from, { text: "❌ Responde a un VIDEO con #mp3" }, { quoted: m }); return }
+      const v = `tmp_${Date.now()}.mp4`
+      const a = `tmp_${Date.now()}.mp3`
       try {
         await sock.sendMessage(from, { text: "🎵 Convirtiendo..." }, { quoted: m })
-        const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: P({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
-        fs.writeFileSync("temp.mp4", buffer)
-        await new Promise((res, rej) => { ffmpeg("temp.mp4").toFormat("mp3").on("end", res).on("error", rej).save("temp.mp3") })
-        await sock.sendMessage(from, { audio: fs.readFileSync("temp.mp3"), mimetype: "audio/mpeg" }, { quoted: m })
-        fs.unlinkSync("temp.mp4"); fs.unlinkSync("temp.mp3")
-      } catch (e) { await sock.sendMessage(from, { text: "❌ Error convirtiendo" }, { quoted: m }) }
+        const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: silentLogger, reuploadRequest: sock.updateMediaMessage })
+        fs.writeFileSync(v, buffer)
+        await new Promise((res, rej) => { ffmpeg(v).toFormat("mp3").on("end", res).on("error", rej).save(a) })
+        await sock.sendMessage(from, { audio: fs.readFileSync(a), mimetype: "audio/mpeg" }, { quoted: m })
+      } catch (e) {
+        console.error("Error mp3:", e)
+        await sock.sendMessage(from, { text: "❌ Error convirtiendo" }, { quoted: m })
+      } finally {
+        limpiar(v, a)
+      }
+      return
+    }
+
+    // ---------- JOSEPH (IA) ----------
+    const match = text.match(/^[#.](?:j|joseph)(?:\s+([\s\S]*))?$/i)
+    if (match) {
+      const pregunta = (match[1] || "").trim()
+      if (!pregunta) { await sock.sendMessage(from, { text: "🐺 *Joseph mueve la cola...* Dime algo: #j hola Joseph" }, { quoted: m }); return }
+      try {
+        await sock.sendPresenceUpdate("composing", from)
+        const reply = await hablarConJoseph(from, pregunta, m.pushName || "Usuario")
+        await sock.sendMessage(from, { text: reply }, { quoted: m })
+      } catch (e) {
+        console.error("Error IA:", e)
+        await sock.sendMessage(from, { text: "🐺 *Joseph baja las orejas...* Ahora no puedo hablar, intenta de nuevo en un momento." }, { quoted: m })
+      }
     }
   })
 }
