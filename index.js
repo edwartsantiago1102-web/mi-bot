@@ -9,7 +9,7 @@ const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
 
 // ================== CONFIG ==================
-const VERSION = "v2.7"
+const VERSION = "v2.7-diag"
 // Segundos máximos del sticker de video (7-8 recomendado, 10 como tope)
 const DURACION_MAX = Number(process.env.DURACION_MAX) || 8
 // Peso máximo aceptable del sticker animado (en bytes)
@@ -128,6 +128,7 @@ async function start() {
   })
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    for (const x of messages) console.log("DIAG llego:", type, x.key?.remoteJid, "fromMe=" + x.key?.fromMe, Object.keys(x.message || {}))
     if (type !== "notify") return
     const m = messages[0]
     if (!m?.message || m.key.fromMe) return
