@@ -9,7 +9,7 @@ const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
 
 // ================== CONFIG IA (Groq + Pollinations) ==================
-// GROQ_API_KEY es opcional. Sin ella se usa Pollinations (no requiere clave).
+// GROQ_API_KEY es opcional pero muy recomendada (es mucho más rápida).
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ""
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
 
@@ -26,16 +26,16 @@ Nunca digas que eres un modelo de lenguaje.
 
 const historial = new Map() // chatId -> [{role, content}]
 
-async function pedirGroq(messages) {
+async function pedirGroq(messages, model) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_API_KEY}` },
-    body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: 300, temperature: 0.9 }),
-    signal: AbortSignal.timeout(25000)
+    body: JSON.stringify({ model, messages, max_tokens: 250, temperature: 0.9 }),
+    signal: AbortSignal.timeout(12000)
   })
   const data = await res.json()
   const reply = data?.choices?.[0]?.message?.content?.trim()
-  if (!reply) throw new Error("Groq: " + JSON.stringify(data).slice(0, 300))
+  if (!reply) throw new Error("Groq: " + JSON.stringify(data).slice(0, 200))
   return reply
 }
 
@@ -44,28 +44,36 @@ async function pedirPollinations(messages) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "openai", messages, temperature: 0.9 }),
-    signal: AbortSignal.timeout(40000)
+    signal: AbortSignal.timeout(20000)
   })
   const data = await res.json()
   const reply = data?.choices?.[0]?.message?.content?.trim()
-  if (!reply) throw new Error("Pollinations: " + JSON.stringify(data).slice(0, 300))
+  if (!reply) throw new Error("Pollinations: " + JSON.stringify(data).slice(0, 200))
   return reply
 }
 
 async function hablarConJoseph(chatId, mensaje, nombre) {
   const hist = historial.get(chatId) || []
-  hist.push({ role: "user", content: `${nombre}: ${mensaje}` })
-  const messages = [{ role: "system", content: PERSONALIDAD }, ...hist.slice(-12)]
+  const nuevo = { role: "user", content: `${nombre}: ${mensaje}` }
+  const messages = [{ role: "system", content: PERSONALIDAD }, ...hist.slice(-10), nuevo]
 
   let reply
   if (GROQ_API_KEY) {
-    try { reply = await pedirGroq(messages) }
-    catch (e) { console.error("Groq falló, probando Pollinations:", e.message) }
+    for (const model of [GROQ_MODEL, "llama-3.1-8b-instant"]) {
+      try { reply = await pedirGroq(messages, model); break }
+      catch (e) { console.error("Groq falló:", e.message) }
+    }
   }
-  if (!reply) reply = await pedirPollinations(messages)
+  if (!reply) {
+    for (let i = 0; i < 2 && !reply; i++) {
+      try { reply = await pedirPollinations(messages) }
+      catch (e) { console.error("Pollinations falló:", e.message) }
+    }
+  }
+  if (!reply) throw new Error("Ninguna IA respondió")
 
-  hist.push({ role: "assistant", content: reply })
-  historial.set(chatId, hist.slice(-12))
+  // Solo se guarda en la memoria si hubo respuesta
+  historial.set(chatId, [...hist, nuevo, { role: "assistant", content: reply }].slice(-12))
   return reply
 }
 
@@ -74,10 +82,10 @@ const app = express()
 let latestQR = null
 let isConnected = false
 app.get("/", async (req, res) => {
-  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.3</h2><p>#s = sticker (imagen/video) | #mp3 = audio | #j = hablar con Joseph</p></body>`)
+  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.4</h2><p>#s = sticker (imagen/video) | #mp3 = audio | #j = hablar con Joseph</p></body>`)
   else if (latestQR) {
     const qrImage = await QRCode.toDataURL(latestQR)
-    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.3</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
+    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.4</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
   } else res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
 })
 app.listen(process.env.PORT || 10000, () => console.log("Web lista"))
@@ -123,7 +131,7 @@ function limpiar(...files) {
 // ================== BOT ==================
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState("auth")
-  const sock = makeWASocket({ auth: state, logger: silentLogger, browser: ["Joseph v2.3", "Chrome", "1.0"] })
+  const sock = makeWASocket({ auth: state, logger: silentLogger, browser: ["Joseph v2.4", "Chrome", "1.0"] })
   sock.ev.on("creds.update", saveCreds)
   sock.ev.on("connection.update", async (u) => {
     const { connection, lastDisconnect, qr } = u
@@ -169,7 +177,7 @@ async function start() {
         }
 
         const sticker = new Sticker(buffer, {
-          pack: "Joseph Bot v2.3",
+          pack: "Joseph Bot v2.4",
           author: `Creado por ${m.pushName || "Usuario"}`,
           type: "full",
           quality: esVideo ? 40 : 80
