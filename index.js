@@ -182,4 +182,10 @@ async function start() {
         const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: silentLogger, reuploadRequest: sock.updateMediaMessage })
         fs.writeFileSync(v, buffer)
         await new Promise((res, rej) => { ffmpeg(v).toFormat("mp3").on("end", res).on("error", rej).save(a) })
-        await sock.sendMessage(from, { audio: fs.readFileSync(a), mimetype:
+        await sock.sendMessage(from, { audio: fs.readFileSync(a), mimetype:      } finally {
+        limpiar(v, a)
+      }
+    }
+  })
+}
+start()
