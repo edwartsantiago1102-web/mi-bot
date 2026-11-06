@@ -9,21 +9,25 @@ const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
 
 // ================== CONFIG ==================
+const VERSION = "v2.7"
 // Segundos máximos del sticker de video (7-8 recomendado, 10 como tope)
 const DURACION_MAX = Number(process.env.DURACION_MAX) || 8
 // Peso máximo aceptable del sticker animado (en bytes)
 const PESO_MAX = 900 * 1024
+// SOLO_GRUPOS=1 en Render -> el bot solo responde en grupos (la IA de Meta no actúa ahí)
+const SOLO_GRUPOS = process.env.SOLO_GRUPOS === "1"
 
 // ================== WEB (QR) ==================
 const app = express()
 let latestQR = null
 let isConnected = false
+const estilo = "background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;font-family:sans-serif"
 app.get("/", async (req, res) => {
-  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.6</h2><p>#s = sticker (imagen/video) | #mp3 = audio</p></body>`)
+  if (isConnected) res.send(`<body style="${estilo}"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot ${VERSION}</h2><p>#s = sticker (imagen/video) | #mp3 = audio</p></body>`)
   else if (latestQR) {
     const qrImage = await QRCode.toDataURL(latestQR)
-    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.6</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
-  } else res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
+    res.send(`<body style="${estilo}"><h1>🐺 Joseph Bot ${VERSION}</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
+  } else res.send(`<body style="${estilo}"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
 })
 app.listen(process.env.PORT || 10000, () => console.log("Web lista"))
 
@@ -41,7 +45,6 @@ function unwrap(message) {
   )
 }
 
-// Recorta y reduce el video para que el sticker pese poco
 function prepararVideo(input, output, fps) {
   return new Promise((resolve, reject) => {
     ffmpeg(input)
@@ -65,7 +68,6 @@ function limpiar(...files) {
   for (const f of files) { try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch {} }
 }
 
-// Crea el sticker de video; si pesa demasiado, reintenta con menos calidad
 async function crearStickerVideo(tmpIn, tmpOut, autor) {
   const intentos = [
     { fps: 12, quality: 40 },
@@ -76,7 +78,7 @@ async function crearStickerVideo(tmpIn, tmpOut, autor) {
   for (const { fps, quality } of intentos) {
     await prepararVideo(tmpIn, tmpOut, fps)
     const sticker = new Sticker(fs.readFileSync(tmpOut), {
-      pack: "Joseph Bot v2.6",
+      pack: `Joseph Bot ${VERSION}`,
       author: autor,
       type: "full",
       quality
@@ -100,7 +102,7 @@ async function start() {
   const sock = makeWASocket({
     auth: state,
     logger: silentLogger,
-    browser: ["Joseph v2.6", "Chrome", "1.0"],
+    browser: [`Joseph ${VERSION}`, "Chrome", "1.0"],
     markOnlineOnConnect: false,
     syncFullHistory: false
   })
@@ -131,6 +133,9 @@ async function start() {
     if (!m?.message || m.key.fromMe) return
     m.message = unwrap(m.message)
     const from = m.key.remoteJid
+    const esGrupo = from.endsWith("@g.us")
+    if (SOLO_GRUPOS && !esGrupo) return
+
     const text = m.message.conversation || m.message.extendedTextMessage?.text || m.message.imageMessage?.caption || m.message.videoMessage?.caption || ""
     const lower = text.toLowerCase().trim()
     const quoted = unwrap(m.message.extendedTextMessage?.contextInfo?.quotedMessage)
@@ -154,11 +159,11 @@ async function start() {
 
         let stickerBuffer
         if (esVideo) {
-          await sock.sendMessage(from, { text: "🎞️ Creando sticker animado..." }, { quoted: m })
+          if (esGrupo) await sock.sendMessage(from, { text: "🎞️ Creando sticker animado..." }, { quoted: m })
           fs.writeFileSync(tmpIn, buffer)
           stickerBuffer = await crearStickerVideo(tmpIn, tmpOut, autor)
         } else {
-          const sticker = new Sticker(buffer, { pack: "Joseph Bot v2.6", author: autor, type: "full", quality: 80 })
+          const sticker = new Sticker(buffer, { pack: `Joseph Bot ${VERSION}`, author: autor, type: "full", quality: 80 })
           stickerBuffer = await sticker.toBuffer()
         }
         await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: m })
@@ -173,16 +178,24 @@ async function start() {
 
     // ---------- MP3 ----------
     if (lower === "#mp3" || lower === ".mp3" || lower === "#a") {
-      if (!quoted?.videoMessage) { await sock.sendMessage(from, { text: "❌ Responde a un VIDEO con #mp3" }, { quoted: m }); return }
+      if (!quoted?.videoMessage) {
+        await sock.sendMessage(from, { text: "❌ Responde a un VIDEO con #mp3" }, { quoted: m })
+        return
+      }
       const id = Date.now()
       const v = `tmp_${id}.mp4`
       const a = `tmp_${id}.mp3`
       try {
-        await sock.sendMessage(from, { text: "🎵 Convirtiendo..." }, { quoted: m })
+        if (esGrupo) await sock.sendMessage(from, { text: "🎵 Convirtiendo..." }, { quoted: m })
         const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: silentLogger, reuploadRequest: sock.updateMediaMessage })
         fs.writeFileSync(v, buffer)
         await new Promise((res, rej) => { ffmpeg(v).toFormat("mp3").on("end", res).on("error", rej).save(a) })
-        await sock.sendMessage(from, { audio: fs.readFileSync(a), mimetype:      } finally {
+        const audioBuffer = fs.readFileSync(a)
+        await sock.sendMessage(from, { audio: audioBuffer, mimetype: "audio/mpeg" }, { quoted: m })
+      } catch (e) {
+        console.error("Error mp3:", e)
+        await sock.sendMessage(from, { text: "❌ Error convirtiendo" }, { quoted: m }).catch(() => {})
+      } finally {
         limpiar(v, a)
       }
     }
