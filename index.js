@@ -19,10 +19,10 @@ const app = express()
 let latestQR = null
 let isConnected = false
 app.get("/", async (req, res) => {
-  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.5</h2><p>#s = sticker (imagen/video) | #mp3 = audio</p></body>`)
+  if (isConnected) res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>✅ Bot Conectado</h1><h2>🐺 Joseph Bot v2.6</h2><p>#s = sticker (imagen/video) | #mp3 = audio</p></body>`)
   else if (latestQR) {
     const qrImage = await QRCode.toDataURL(latestQR)
-    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.5</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
+    res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column"><h1>🐺 Joseph Bot v2.6</h1><img src="${qrImage}" style="width:300px;background:white;padding:12px;border-radius:20px"><script>setTimeout(()=>location.reload(),15000)</script></body>`)
   } else res.send(`<body style="background:#0a0a0a;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh"><h1>Cargando QR...</h1><script>setTimeout(()=>location.reload(),3000)</script></body>`)
 })
 app.listen(process.env.PORT || 10000, () => console.log("Web lista"))
@@ -76,7 +76,7 @@ async function crearStickerVideo(tmpIn, tmpOut, autor) {
   for (const { fps, quality } of intentos) {
     await prepararVideo(tmpIn, tmpOut, fps)
     const sticker = new Sticker(fs.readFileSync(tmpOut), {
-      pack: "Joseph Bot v2.5",
+      pack: "Joseph Bot v2.6",
       author: autor,
       type: "full",
       quality
@@ -88,15 +88,32 @@ async function crearStickerVideo(tmpIn, tmpOut, autor) {
 }
 
 // ================== BOT ==================
+let sockActual = null
+
 async function start() {
+  // Cierra el socket anterior para no tener dos conexiones con las mismas claves
+  if (sockActual) {
+    try { sockActual.ev.removeAllListeners(); sockActual.end(undefined) } catch {}
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState("auth")
-  const sock = makeWASocket({ auth: state, logger: silentLogger, browser: ["Joseph v2.5", "Chrome", "1.0"] })
+  const sock = makeWASocket({
+    auth: state,
+    logger: silentLogger,
+    browser: ["Joseph v2.6", "Chrome", "1.0"],
+    markOnlineOnConnect: false,
+    syncFullHistory: false
+  })
+  sockActual = sock
+
   sock.ev.on("creds.update", saveCreds)
+
   sock.ev.on("connection.update", async (u) => {
     const { connection, lastDisconnect, qr } = u
     if (qr) latestQR = qr
     if (connection === "open") { isConnected = true; latestQR = null; console.log("✅ CONECTADO") }
     if (connection === "close") {
+      if (sock !== sockActual) return
       isConnected = false
       const code = lastDisconnect?.error?.output?.statusCode
       if (code === DisconnectReason.loggedOut) {
@@ -141,13 +158,13 @@ async function start() {
           fs.writeFileSync(tmpIn, buffer)
           stickerBuffer = await crearStickerVideo(tmpIn, tmpOut, autor)
         } else {
-          const sticker = new Sticker(buffer, { pack: "Joseph Bot v2.5", author: autor, type: "full", quality: 80 })
+          const sticker = new Sticker(buffer, { pack: "Joseph Bot v2.6", author: autor, type: "full", quality: 80 })
           stickerBuffer = await sticker.toBuffer()
         }
         await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: m })
       } catch (e) {
         console.error("Error sticker:", e)
-        await sock.sendMessage(from, { text: "❌ No pude crear el sticker. Prueba con un video más corto o más liviano." }, { quoted: m })
+        await sock.sendMessage(from, { text: "❌ No pude crear el sticker. Prueba con un video más corto o más liviano." }, { quoted: m }).catch(() => {})
       } finally {
         limpiar(tmpIn, tmpOut)
       }
@@ -165,14 +182,4 @@ async function start() {
         const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: silentLogger, reuploadRequest: sock.updateMediaMessage })
         fs.writeFileSync(v, buffer)
         await new Promise((res, rej) => { ffmpeg(v).toFormat("mp3").on("end", res).on("error", rej).save(a) })
-        await sock.sendMessage(from, { audio: fs.readFileSync(a), mimetype: "audio/mpeg" }, { quoted: m })
-      } catch (e) {
-        console.error("Error mp3:", e)
-        await sock.sendMessage(from, { text: "❌ Error convirtiendo" }, { quoted: m })
-      } finally {
-        limpiar(v, a)
-      }
-    }
-  })
-}
-start()
+        await sock.sendMessage(from, { audio: fs.readFileSync(a), mimetype:
